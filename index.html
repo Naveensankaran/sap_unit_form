@@ -59,44 +59,93 @@ function closePopup(result){try{$Client.close(result||{saved:false})}catch(e){tr
 function plain(v){if(v===null||v===undefined)return "";if(typeof v==="object")return v.name!==undefined?String(v.name||""):"";return String(v)}
 function lookupId(v){return v&&typeof v==="object"&&v.id?String(v.id):""}
 function normalizeList(response){
- // Zoho function responses can be arrays, objects, or JSON strings.
+ // Normalize Zoho CRM function responses to a plain array of lookup records.
  var output=response;
- if(output && output.details && output.details.output!==undefined){
-  output=output.details.output;
- }else if(output && output.output!==undefined){
-  output=output.output;
- }
- // Handle JSON strings, including a JSON string nested inside another string.
- for(var i=0;i<3 && typeof output==="string";i++){
-  output=output.trim();
-  if(!output)return [];
-  try{output=JSON.parse(output)}catch(e){
-   console.error("Could not parse getunitsbyproject response:",output);
-   return [];
+
+ // Unwrap common Zoho SDK response shapes.
+ for(var depth=0;depth<4;depth++){
+  if(output && !Array.isArray(output) && typeof output==="object"){
+   if(output.details && output.details.output!==undefined){
+    output=output.details.output;
+    continue;
+   }
+   if(output.output!==undefined){
+    output=output.output;
+    continue;
+   }
+   if(Array.isArray(output.data)){
+    output=output.data;
+    continue;
+   }
+   if(Array.isArray(output.result)){
+    output=output.result;
+    continue;
+   }
   }
+
+  if(typeof output==="string"){
+   var str=output.trim();
+   if(!str)return [];
+   try{
+    output=JSON.parse(str);
+    continue;
+   }catch(parseError){
+    // Do not silently treat a Deluge list's display string as a valid list.
+    console.error("getunitsbyproject returned a non-JSON string:",str);
+    return [];
+   }
+  }
+  break;
  }
- if(Array.isArray(output))return output.filter(function(x){return x && typeof x==="object"});
- if(output && typeof output==="object"){
-  if(Array.isArray(output.data))return output.data;
-  if(Array.isArray(output.result))return output.result;
-  if(output.Name || output.name || output.id)return [output];
+
+ if(Array.isArray(output)){
+  return output.filter(function(item){
+   return item && typeof item==="object" &&
+          item.id!==undefined && item.id!==null;
+  });
  }
- console.error("Unexpected getunitsbyproject response format:",output);
+
+ if(output && typeof output==="object" &&
+    output.id!==undefined && output.id!==null){
+  return [output];
+ }
+
+ console.error("Unexpected getunitsbyproject response:",output);
  return [];
 }
 
 function fillOptions(sel,list,placeholder,keepValue){
- var old=keepValue!==undefined?keepValue:sel.value;
- var normalized=normalizeList(list);
+ var old=keepValue!==undefined?String(keepValue||""):String(sel.value||"");
+ var normalized=Array.isArray(list)?list:normalizeList(list);
+
  sel.innerHTML="";
- var first=document.createElement("option");first.value="";first.textContent=placeholder;sel.appendChild(first);
- normalized.forEach(function(x){
-  var id=x.id!==undefined && x.id!==null ? String(x.id) : "";
-  var name=x.Name || x.name || x.Product_Name || id;
+ var first=document.createElement("option");
+ first.value="";
+ first.textContent=placeholder;
+ sel.appendChild(first);
+
+ normalized.forEach(function(item){
+  var id=item.id!==undefined && item.id!==null?String(item.id):"";
+  var name=item.Name || item.name || item.Product_Name || item.Unit_Name || id;
   if(!id)return;
-  var op=document.createElement("option");op.value=id;op.textContent=String(name);sel.appendChild(op);
+
+  // Avoid duplicate options if the response contains duplicate records.
+  if(Array.prototype.some.call(sel.options,function(option){return option.value===id;})){
+   return;
+  }
+
+  var option=document.createElement("option");
+  option.value=id;
+  option.textContent=String(name);
+  sel.appendChild(option);
  });
- if(old && Array.prototype.some.call(sel.options,function(o){return o.value===String(old)}))sel.value=String(old);
+
+ // Keep the previous selection only if it is among the returned records.
+ if(old && Array.prototype.some.call(sel.options,function(option){return option.value===old;})){
+  sel.value=old;
+ }
+
+ console.log("Dropdown loaded:",sel.id,"options:",Math.max(0,sel.options.length-1));
 }
 function setLookup(sel,id,name){
  sel.innerHTML="";var first=document.createElement("option");first.value="";first.textContent="Select";sel.appendChild(first);
@@ -124,28 +173,55 @@ function build(){
 function executeGetUnits(moduleName,refIds){
  return ZOHO.CRM.FUNCTIONS.execute("getunitsbyproject",{
   arguments:JSON.stringify({module:moduleName,RefIds:refIds})
- }).then(function(resp){
-  console.log("getunitsbyproject response ("+moduleName+"):",resp);
-  return normalizeList(resp);
+ }).then(function(response){
+  console.log("Raw getunitsbyproject response ("+moduleName+"):",response);
+  var list=normalizeList(response);
+  console.log("Parsed "+moduleName+" records:",list);
+  return list;
  });
 }
 function currentRefs(){
- return {Project:lookupId(recordData.Project)||$("i_Project").value||"",
-         Tower:$("i_Towers").value||lookupId(recordData.Towers),
-         Floor:$("i_floor_test").value||lookupId(recordData.floor_test)};
+ return {
+  Project:$("i_Project").value || lookupId(recordData.Project) || "",
+  Tower:$("i_Towers").value || "",
+  Floor:$("i_floor_test").value || ""
+ };
 }
 function loadLookup(moduleName,refIds){
  return executeGetUnits(moduleName,refIds).then(function(list){
-  list=normalizeList(list);
+  // executeGetUnits already returns a normalized array.
   lookupOptions[moduleName]=list;
-  var api=moduleName==="TOWER"?"Towers":moduleName==="FLOOR"?"floor_test":"Unit";
-  var sel=$("i_"+api), current=lookupId(recordData[api])||sel.value;
-  fillOptions(sel,list,"Select "+(moduleName==="TOWER"?"tower":moduleName==="FLOOR"?"floor":"unit"),current);
+
+  var api=moduleName==="TOWER"?"Towers":
+          moduleName==="FLOOR"?"floor_test":"Unit";
+  var sel=$("i_"+api);
+  var current=lookupId(recordData[api]) || sel.value || "";
+
+  fillOptions(
+   sel,
+   list,
+   "Select "+(moduleName==="TOWER"?"tower":
+              moduleName==="FLOOR"?"floor":"unit"),
+   current
+  );
+
+  // Always enable a dropdown after its options have loaded, even when empty.
   sel.disabled=false;
-  if(current && !Array.prototype.some.call(sel.options,function(o){return o.value===String(current)})){
-   // Preserve a currently selected record even if the function did not return it.
-   var currentName=plain(recordData[api]);var op=document.createElement("option");op.value=String(current);op.textContent=currentName||String(current);sel.appendChild(op);sel.value=String(current);
+
+  // If the lead has an old selected lookup not returned by the current filter,
+  // preserve it for display without replacing the options returned by the API.
+  if(current && !Array.prototype.some.call(sel.options,function(option){
+   return option.value===String(current);
+  })){
+   var option=document.createElement("option");
+   option.value=String(current);
+   option.textContent=plain(recordData[api]) || String(current);
+   sel.appendChild(option);
+   sel.value=String(current);
   }
+
+  console.log(api+" dropdown final option count:",Math.max(0,sel.options.length-1));
+  return list;
  });
 }
 function handleLookupChange(api){

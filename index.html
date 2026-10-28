@@ -119,17 +119,13 @@ function fillOptions(sel,list,placeholder,keepValue){
  var normalized=Array.isArray(list)?list:normalizeList(list);
 
  sel.innerHTML="";
- var first=document.createElement("option");
- first.value="";
- first.textContent=placeholder;
- sel.appendChild(first);
 
+ // No visible "Select tower/floor/unit" placeholder option.
  normalized.forEach(function(item){
   var id=item.id!==undefined && item.id!==null?String(item.id):"";
   var name=item.Name || item.name || item.Product_Name || item.Unit_Name || id;
   if(!id)return;
 
-  // Avoid duplicate options if the response contains duplicate records.
   if(Array.prototype.some.call(sel.options,function(option){return option.value===id;})){
    return;
   }
@@ -140,12 +136,17 @@ function fillOptions(sel,list,placeholder,keepValue){
   sel.appendChild(option);
  });
 
- // Keep the previous selection only if it is among the returned records.
+ // Preserve the current value if it is in the fetched options.
  if(old && Array.prototype.some.call(sel.options,function(option){return option.value===old;})){
   sel.value=old;
+ } else if(sel.options.length){
+  // If no existing selection is available, select the first returned record.
+  sel.selectedIndex=0;
+ } else {
+  sel.selectedIndex=-1;
  }
 
- console.log("Dropdown loaded:",sel.id,"options:",Math.max(0,sel.options.length-1));
+ console.log("Dropdown loaded:",sel.id,"options:",sel.options.length);
 }
 function setLookup(sel,id,name){
  sel.innerHTML="";var first=document.createElement("option");first.value="";first.textContent="Select";sel.appendChild(first);
@@ -161,7 +162,7 @@ function build(){
    var label=document.createElement("label");label.htmlFor="i_"+it.api;label.textContent=it.label;
    if(it.req){var star=document.createElement("span");star.className="req";star.textContent="*";label.appendChild(star)}
    wrap.appendChild(label);var input=document.createElement("select");input.id="i_"+it.api;
-   if(it.type==="lookup"){fillOptions(input,[],"Select "+it.label.toLowerCase());input.disabled=true}
+   if(it.type==="lookup"){fillOptions(input,[],"");input.disabled=true}
    else {var op=document.createElement("option");op.value="";op.textContent="";input.appendChild(op)}
    if(it.readOnly){input.disabled=true;input.setAttribute("aria-readonly","true")}
    wrap.appendChild(input);var err=document.createElement("div");err.className="err";err.id="e_"+it.api;err.textContent=it.label+" cannot be empty.";wrap.appendChild(err);
@@ -189,7 +190,7 @@ function currentRefs(){
 }
 function loadLookup(moduleName,refIds){
  return executeGetUnits(moduleName,refIds).then(function(list){
-  // executeGetUnits already returns a normalized array.
+  list=normalizeList(list);
   lookupOptions[moduleName]=list;
 
   var api=moduleName==="TOWER"?"Towers":
@@ -197,42 +198,31 @@ function loadLookup(moduleName,refIds){
   var sel=$("i_"+api);
   var current=lookupId(recordData[api]) || sel.value || "";
 
-  fillOptions(
-   sel,
-   list,
-   "Select "+(moduleName==="TOWER"?"tower":
-              moduleName==="FLOOR"?"floor":"unit"),
-   current
-  );
-
-  // Always enable a dropdown after its options have loaded, even when empty.
+  fillOptions(sel,list,"",current);
   sel.disabled=false;
 
-  // If the lead has an old selected lookup not returned by the current filter,
-  // preserve it for display without replacing the options returned by the API.
-  if(current && !Array.prototype.some.call(sel.options,function(option){
+  // If the current lead lookup is not part of the current filtered results,
+  // do not append it to the dropdown: show only valid options for this parent.
+  if(current && Array.prototype.some.call(sel.options,function(option){
    return option.value===String(current);
   })){
-   var option=document.createElement("option");
-   option.value=String(current);
-   option.textContent=plain(recordData[api]) || String(current);
-   sel.appendChild(option);
    sel.value=String(current);
   }
 
-  console.log(api+" dropdown final option count:",Math.max(0,sel.options.length-1));
+  console.log(api+" dropdown options returned:",list.length,
+              "rendered:",sel.options.length,"refs:",refIds);
   return list;
  });
 }
 function handleLookupChange(api){
  var tower=$("i_Towers"),floor=$("i_floor_test"),unit=$("i_Unit");
  if(api==="Towers"){
-  fillOptions(floor,[],"Select floor");floor.disabled=true;fillOptions(unit,[],"Select unit");unit.disabled=true;
+  fillOptions(floor,[],"");floor.disabled=true;fillOptions(unit,[],"");unit.disabled=true;
   recordData.Towers={id:tower.value,name:tower.options[tower.selectedIndex]?tower.options[tower.selectedIndex].text:""};
   recordData.floor_test=null;recordData.Unit=null;
   if(tower.value){showOverlay("Loading floors...");loadLookup("FLOOR",currentRefs()).then(function(){hideOverlay()}).catch(function(e){hideOverlay();showBanner("Could not load floors: "+msg(e))})}
  }else if(api==="floor_test"){
-  fillOptions(unit,[],"Select unit");unit.disabled=true;
+  fillOptions(unit,[],"");unit.disabled=true;
   recordData.floor_test={id:floor.value,name:floor.options[floor.selectedIndex]?floor.options[floor.selectedIndex].text:""};recordData.Unit=null;
   if(floor.value){showOverlay("Loading units...");loadLookup("UNIT",currentRefs()).then(function(){hideOverlay()}).catch(function(e){hideOverlay();showBanner("Could not load units: "+msg(e))})}
  }else if(api==="Unit"){

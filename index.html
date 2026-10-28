@@ -58,10 +58,44 @@ function msg(e){return e&&e.message?e.message:JSON.stringify(e)}
 function closePopup(result){try{$Client.close(result||{saved:false})}catch(e){try{ZOHO.CRM.UI.Popup.closeReload()}catch(e2){console.error(e2)}}}
 function plain(v){if(v===null||v===undefined)return "";if(typeof v==="object")return v.name!==undefined?String(v.name||""):"";return String(v)}
 function lookupId(v){return v&&typeof v==="object"&&v.id?String(v.id):""}
+function normalizeList(response){
+ // Zoho function responses can be arrays, objects, or JSON strings.
+ var output=response;
+ if(output && output.details && output.details.output!==undefined){
+  output=output.details.output;
+ }else if(output && output.output!==undefined){
+  output=output.output;
+ }
+ // Handle JSON strings, including a JSON string nested inside another string.
+ for(var i=0;i<3 && typeof output==="string";i++){
+  output=output.trim();
+  if(!output)return [];
+  try{output=JSON.parse(output)}catch(e){
+   console.error("Could not parse getunitsbyproject response:",output);
+   return [];
+  }
+ }
+ if(Array.isArray(output))return output.filter(function(x){return x && typeof x==="object"});
+ if(output && typeof output==="object"){
+  if(Array.isArray(output.data))return output.data;
+  if(Array.isArray(output.result))return output.result;
+  if(output.Name || output.name || output.id)return [output];
+ }
+ console.error("Unexpected getunitsbyproject response format:",output);
+ return [];
+}
+
 function fillOptions(sel,list,placeholder,keepValue){
- var old=keepValue!==undefined?keepValue:sel.value;sel.innerHTML="";
+ var old=keepValue!==undefined?keepValue:sel.value;
+ var normalized=normalizeList(list);
+ sel.innerHTML="";
  var first=document.createElement("option");first.value="";first.textContent=placeholder;sel.appendChild(first);
- (list||[]).forEach(function(x){var op=document.createElement("option");op.value=String(x.id);op.textContent=String(x.Name||x.name||"");sel.appendChild(op)});
+ normalized.forEach(function(x){
+  var id=x.id!==undefined && x.id!==null ? String(x.id) : "";
+  var name=x.Name || x.name || x.Product_Name || id;
+  if(!id)return;
+  var op=document.createElement("option");op.value=id;op.textContent=String(name);sel.appendChild(op);
+ });
  if(old && Array.prototype.some.call(sel.options,function(o){return o.value===String(old)}))sel.value=String(old);
 }
 function setLookup(sel,id,name){
@@ -88,12 +122,11 @@ function build(){
  });
 }
 function executeGetUnits(moduleName,refIds){
- return ZOHO.CRM.FUNCTIONS.execute("getunitsbyproject",{arguments:JSON.stringify({module:moduleName,RefIds:refIds})})
- .then(function(resp){
-  var out=resp&&resp.details&&resp.details.output!==undefined?resp.details.output:(resp&&resp.output!==undefined?resp.output:null);
-  if(Array.isArray(out))return out;
-  if(typeof out==="string"){try{return JSON.parse(out)}catch(e){return []}}
-  return [];
+ return ZOHO.CRM.FUNCTIONS.execute("getunitsbyproject",{
+  arguments:JSON.stringify({module:moduleName,RefIds:refIds})
+ }).then(function(resp){
+  console.log("getunitsbyproject response ("+moduleName+"):",resp);
+  return normalizeList(resp);
  });
 }
 function currentRefs(){
@@ -103,7 +136,8 @@ function currentRefs(){
 }
 function loadLookup(moduleName,refIds){
  return executeGetUnits(moduleName,refIds).then(function(list){
-  lookupOptions[moduleName]=list||[];
+  list=normalizeList(list);
+  lookupOptions[moduleName]=list;
   var api=moduleName==="TOWER"?"Towers":moduleName==="FLOOR"?"floor_test":"Unit";
   var sel=$("i_"+api), current=lookupId(recordData[api])||sel.value;
   fillOptions(sel,list,"Select "+(moduleName==="TOWER"?"tower":moduleName==="FLOOR"?"floor":"unit"),current);

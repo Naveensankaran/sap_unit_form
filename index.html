@@ -44,6 +44,7 @@ var SECTIONS=[{title:"Project / Unit Details",items:[
  {api:"Towers",label:"Tower",type:"lookup",module:"TOWER",req:true},
  {api:"floor_test",label:"Floor",type:"lookup",module:"FLOOR",req:true},
  {api:"Unit",label:"Unit",type:"lookup",module:"UNIT",req:true},
+ {api:"Reserved_Date",label:"Reserved Date",type:"date",req:false},
  {api:"Source",label:"Source",type:"display",req:true,readOnly:true},
  {api:"Sub_Source",label:"Sub-Source",type:"display",req:true,readOnly:true}
 ]}];
@@ -160,9 +161,18 @@ function build(){
    var wrap=document.createElement("div");wrap.className="field"+(it.req?" mandatory":"");wrap.id="f_"+it.api;
    var label=document.createElement("label");label.htmlFor="i_"+it.api;label.textContent=it.label;
    if(it.req){var star=document.createElement("span");star.className="req";star.textContent="*";label.appendChild(star)}
-   wrap.appendChild(label);var input=document.createElement("select");input.id="i_"+it.api;
-   if(it.type==="lookup"){fillOptions(input,[],"Select "+it.label.toLowerCase());input.disabled=true}
-   else {var op=document.createElement("option");op.value="";op.textContent="";input.appendChild(op)}
+   wrap.appendChild(label);
+   var input;
+   if(it.type==="date"){
+    input=document.createElement("input");
+    input.type="date";
+    input.id="i_"+it.api;
+   }else{
+    input=document.createElement("select");
+    input.id="i_"+it.api;
+    if(it.type==="lookup"){fillOptions(input,[],"Select "+it.label.toLowerCase());input.disabled=true}
+    else {var op=document.createElement("option");op.value="";op.textContent="";input.appendChild(op)}
+   }
    if(it.readOnly){input.disabled=true;input.setAttribute("aria-readonly","true")}
    wrap.appendChild(input);var err=document.createElement("div");err.className="err";err.id="e_"+it.api;err.textContent=it.label+" cannot be empty.";wrap.appendChild(err);
    input.addEventListener("change",function(){wrap.classList.remove("invalid");if(it.type==="lookup")handleLookupChange(it.api)});
@@ -183,24 +193,39 @@ function executeGetUnits(moduleName, refIds) {
 
         var output = response;
 
-        if (output && output.details &&
-            output.details.output !== undefined) {
+        if (output && output.details && output.details.output !== undefined) {
             output = output.details.output;
         } else if (output && output.output !== undefined) {
             output = output.output;
         }
 
-        console.log("Function output:", output);
+        console.log("Deluge output:", output);
         console.log("Output type:", typeof output);
+
+        if (typeof output === "string") {
+            var text = output.trim();
+            if (!text) return [];
+
+            try {
+                output = JSON.parse(text);
+            } catch (parseError) {
+                // Support the old output format: {"Name":"E","id":"1"},{"Name":"D","id":"2"}
+                try {
+                    var inner = text.replace(/^\\[|\\]$/g, "");
+                    output = JSON.parse("[" + inner + "]");
+                } catch (repairError) {
+                    console.error("Invalid JSON returned by Deluge:", text);
+                    throw new Error("The getunitsbyproject function returned invalid JSON.");
+                }
+            }
+        }
 
         if (typeof output === "string") {
             try {
                 output = JSON.parse(output);
-            } catch (error) {
-                console.error("Invalid JSON returned by Deluge:", output);
-                throw new Error(
-                    "Deluge function returned invalid JSON. Check the function output in the console."
-                );
+            } catch (parseError) {
+                console.error("Nested function output is invalid JSON:", output);
+                throw new Error("Could not parse the function output.");
             }
         }
 
@@ -209,11 +234,14 @@ function executeGetUnits(moduleName, refIds) {
             throw new Error("Function output is not a JSON array.");
         }
 
-        console.log("Records received:", output.length);
+        console.log("Parsed records:", output);
+        console.log("Record count:", output.length);
         return output;
+    }).catch(function(error) {
+        console.error("Failed to fetch records:", error);
+        throw error;
     });
 }
-
 
 
 function currentRefs(){
@@ -226,17 +254,6 @@ function currentRefs(){
 
 function loadLookup(moduleName, refIds) {
     return executeGetUnits(moduleName, refIds).then(function(list) {
-
-        // Ensure the response is an array
-        if (typeof list === "string") {
-            try {
-                list = JSON.parse(list);
-            } catch (e) {
-                console.error("Invalid JSON returned by Deluge:", list);
-                throw new Error("Could not parse lookup records.");
-            }
-        }
-
         if (!Array.isArray(list)) {
             console.error("Expected an array but received:", list);
             throw new Error("Lookup response is not an array.");
@@ -253,19 +270,14 @@ function loadLookup(moduleName, refIds) {
         var sel = $("i_" + api);
         var current = lookupId(recordData[api]) || sel.value || "";
 
-        // Populate dropdown without a placeholder option
+        // Populate without a placeholder option.
         fillOptions(sel, list, "", current);
-
-        // Enable dropdown after loading
         sel.disabled = false;
 
-        // Restore existing value if it wasn't included in the response
-        if (
-            current &&
-            !Array.prototype.some.call(sel.options, function(option) {
-                return option.value === String(current);
-            })
-        ) {
+        // Preserve the existing lead lookup if it is missing from the response.
+        if (current && !Array.prototype.some.call(sel.options, function(option) {
+            return option.value === String(current);
+        })) {
             var option = document.createElement("option");
             option.value = String(current);
             option.textContent = plain(recordData[api]) || String(current);
@@ -275,7 +287,6 @@ function loadLookup(moduleName, refIds) {
 
         console.log(api + " dropdown option count:", sel.options.length);
         console.log(api + " records:", list);
-
         return list;
     });
 }
@@ -307,6 +318,10 @@ function prefill(rec){
   var el=$("i_"+pair[0]);el.innerHTML="";var op=document.createElement("option");op.value=plain(pair[1]);op.textContent=plain(pair[1])||"—";el.appendChild(op);
  });
  allItems().forEach(function(it){original[it.api]=rec[it.api]});
+ var reservedDate = rec.Reserved_Date;
+ if(reservedDate){
+  $("i_Reserved_Date").value = String(reservedDate).substring(0,10);
+ }
  if(!projectId){return Promise.resolve()}
  $("i_Towers").disabled=true;$("i_floor_test").disabled=true;$("i_Unit").disabled=true;
  return loadLookup("TOWER",{Project:projectId,Tower:"",Floor:""}).then(function(){
@@ -338,6 +353,8 @@ function save(){
  payload.Towers={id:$("i_Towers").value};
  payload.floor_test={id:$("i_floor_test").value};
  payload.Unit={id:$("i_Unit").value};
+ var reservedDate = $("i_Reserved_Date").value;
+ payload.Reserved_Date = reservedDate || null;
  // Project, Source and Sub-Source are read-only in this popup; leave them unchanged.
  ZOHO.CRM.API.updateRecord({Entity:"Leads",APIData:payload})
  .then(function(res){

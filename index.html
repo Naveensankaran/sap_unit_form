@@ -171,6 +171,7 @@ function build(){
  });
 }
 
+
 function executeGetUnits(moduleName, refIds) {
     return ZOHO.CRM.FUNCTIONS.execute("getunitsbyproject", {
         arguments: JSON.stringify({
@@ -178,51 +179,41 @@ function executeGetUnits(moduleName, refIds) {
             RefIds: refIds
         })
     }).then(function(response) {
+        console.log("Raw function response:", response);
 
-        console.log("Raw response:", response);
-
-        // Extract the output string from the Zoho response
         var output = response;
 
         if (output && output.details &&
             output.details.output !== undefined) {
-
             output = output.details.output;
-
         } else if (output && output.output !== undefined) {
-
             output = output.output;
         }
 
-        console.log("Deluge output:", output);
+        console.log("Function output:", output);
         console.log("Output type:", typeof output);
 
-        // Convert the Deluge string into a JavaScript array
         if (typeof output === "string") {
-            output = JSON.parse(output);
+            try {
+                output = JSON.parse(output);
+            } catch (error) {
+                console.error("Invalid JSON returned by Deluge:", output);
+                throw new Error(
+                    "Deluge function returned invalid JSON. Check the function output in the console."
+                );
+            }
         }
 
-        // Handle a JSON string nested inside another JSON string
-        if (typeof output === "string") {
-            output = JSON.parse(output);
-        }
-
-        // Verify that the result is an array
         if (!Array.isArray(output)) {
             console.error("Expected an array but received:", output);
-            return [];
+            throw new Error("Function output is not a JSON array.");
         }
 
-        console.log("Parsed records:", output);
-        console.log("Record count:", output.length);
-
+        console.log("Records received:", output.length);
         return output;
-
-    }).catch(function(error) {
-        console.error("Failed to fetch records:", error);
-        throw error;
     });
 }
+
 
 
 function currentRefs(){
